@@ -1,0 +1,169 @@
+// EcoMemo - schema del database
+// SQLite, come richiesto dai requisiti tecnici (self-hosted, singolo file portatile).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Utente registrato con email + password (nessun ruolo avanzato, nessun login esterno).
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  pdfDocuments     PdfDocument[]
+  wasteTypes       WasteType[]
+  calendarEvents   CalendarEvent[]
+  reminderSettings ReminderSettings?
+  telegramConfig   TelegramConfig?
+  discordConfig    DiscordConfig?
+
+  @@map("users")
+}
+
+enum PdfDocumentStatus {
+  UPLOADED
+  PAGES_SELECTED
+  PROCESSING
+  PROCESSED
+  ERROR
+}
+
+/// Un calendario rifiuti caricato in PDF dall'utente.
+model PdfDocument {
+  id           String            @id @default(cuid())
+  userId       String
+  fileName     String
+  storedPath   String
+  pageCount      Int
+  status         PdfDocumentStatus @default(UPLOADED)
+  processingStep Int               @default(0)
+  errorMessage   String?
+  uploadedAt     DateTime          @default(now())
+  processedAt    DateTime?
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pages          PdfPage[]
+  calendarEvents CalendarEvent[]
+
+  @@map("pdf_documents")
+}
+
+/// Una pagina del PDF caricato, con l'indicazione se l'utente l'ha selezionata per l'elaborazione.
+model PdfPage {
+  id            String  @id @default(cuid())
+  pdfDocumentId String
+  pageNumber    Int
+  selected      Boolean @default(false)
+  thumbnailPath String?
+
+  pdfDocument PdfDocument @relation(fields: [pdfDocumentId], references: [id], onDelete: Cascade)
+
+  @@unique([pdfDocumentId, pageNumber])
+  @@map("pdf_pages")
+}
+
+/// Tipologia di rifiuto, con nome originale estratto dal PDF e nome personalizzato dall'utente.
+model WasteType {
+  id           String  @id @default(cuid())
+  userId       String
+  name         String
+  originalName String?
+  color        String  @default("#22c55e")
+  createdAt    DateTime @default(now())
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  calendarEvents CalendarEvent[]
+
+  @@unique([userId, name])
+  @@map("waste_types")
+}
+
+/// Un evento di raccolta: in una data è prevista la raccolta di una certa tipologia di rifiuto.
+model CalendarEvent {
+  id            String   @id @default(cuid())
+  userId        String
+  wasteTypeId   String
+  pdfDocumentId String?
+  date          DateTime
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wasteType   WasteType    @relation(fields: [wasteTypeId], references: [id], onDelete: Cascade)
+  pdfDocument PdfDocument? @relation(fields: [pdfDocumentId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, wasteTypeId, date])
+  @@index([userId, date])
+  @@map("calendar_events")
+}
+
+/// Configurazione dei promemoria di un utente (giorno prima / giorno stesso, messaggio, ecc.).
+model ReminderSettings {
+  id                 String  @id @default(cuid())
+  userId             String  @unique
+  dayBeforeEnabled   Boolean @default(true)
+  dayBeforeTime      String  @default("20:00")
+  sameDayEnabled     Boolean @default(true)
+  sameDayTime        String  @default("07:30")
+  skipEmptyDays      Boolean @default(true)
+  messageTemplate    String  @default("Ricordati di mettere fuori {tipo_rifiuto}.")
+  updatedAt          DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("reminder_settings")
+}
+
+/// Configurazione del bot Telegram usato per l'invio dei promemoria.
+model TelegramConfig {
+  id           String    @id @default(cuid())
+  userId       String    @unique
+  botToken     String?
+  chatId       String?
+  lastTestAt   DateTime?
+  lastTestOk   Boolean?
+  updatedAt    DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("telegram_configs")
+}
+
+/// Configurazione del bot Discord usato per l'invio dei promemoria.
+model DiscordConfig {
+  id           String    @id @default(cuid())
+  userId       String    @unique
+  botToken     String?
+  channelId    String?
+  lastTestAt   DateTime?
+  lastTestOk   Boolean?
+  updatedAt    DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("discord_configs")
+}
+
+enum ReminderKind {
+  DAY_BEFORE
+  SAME_DAY
+}
+
+/// Traccia i promemoria già inviati, per evitare invii duplicati se il
+/// controllo periodico viene eseguito più volte nella stessa finestra.
+model ReminderLog {
+  id       String       @id @default(cuid())
+  userId   String
+  date     DateTime
+  kind     ReminderKind
+  sentAt   DateTime     @default(now())
+
+  @@unique([userId, date, kind])
+  @@map("reminder_logs")
+}
